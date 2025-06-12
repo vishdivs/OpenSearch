@@ -32,22 +32,12 @@
 package org.opensearch.index.shard;
 
 import org.apache.lucene.codecs.CodecUtil;
+import org.apache.lucene.document.Document;
 import org.apache.lucene.document.Field;
 import org.apache.lucene.document.SortedNumericDocValuesField;
 import org.apache.lucene.document.StringField;
-import org.apache.lucene.index.DirectoryReader;
-import org.apache.lucene.index.IndexWriter;
-import org.apache.lucene.index.IndexWriterConfig;
-import org.apache.lucene.index.LeafReader;
-import org.apache.lucene.index.LeafReaderContext;
-import org.apache.lucene.index.NoMergePolicy;
-import org.apache.lucene.index.SegmentCommitInfo;
-import org.apache.lucene.index.SegmentInfos;
-import org.apache.lucene.index.Terms;
-import org.apache.lucene.index.TermsEnum;
-import org.apache.lucene.search.Sort;
-import org.apache.lucene.search.SortField;
-import org.apache.lucene.search.SortedNumericSortField;
+import org.apache.lucene.index.*;
+import org.apache.lucene.search.*;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.store.IOContext;
 import org.apache.lucene.store.IndexOutput;
@@ -55,6 +45,7 @@ import org.apache.lucene.util.BytesRef;
 import org.opensearch.Version;
 import org.opensearch.cluster.metadata.IndexMetadata;
 import org.opensearch.cluster.routing.OperationRouting;
+import org.opensearch.common.lucene.Lucene;
 import org.opensearch.common.settings.Settings;
 import org.opensearch.common.util.io.IOUtils;
 import org.opensearch.core.index.shard.ShardId;
@@ -113,7 +104,7 @@ public class StoreRecoveryTests extends OpenSearchTestCase {
         Directory target = newFSDirectory(createTempDir());
         final long maxSeqNo = randomNonNegativeLong();
         final long maxUnsafeAutoIdTimestamp = randomNonNegativeLong();
-        storeRecovery.addIndices(indexStats, target, indexSort, dirs, maxSeqNo, maxUnsafeAutoIdTimestamp, null, 0, false, false);
+        storeRecovery.addIndices(indexStats, target, indexSort, dirs, maxSeqNo, maxUnsafeAutoIdTimestamp, null, false, 0, false, false);
         int numFiles = 0;
         Predicate<String> filesFilter = (f) -> f.startsWith("segments") == false
             && f.equals("write.lock") == false
@@ -195,6 +186,7 @@ public class StoreRecoveryTests extends OpenSearchTestCase {
             maxSeqNo,
             maxUnsafeAutoIdTimestamp,
             metadata,
+            false,
             targetShardId,
             true,
             false
@@ -246,6 +238,111 @@ public class StoreRecoveryTests extends OpenSearchTestCase {
         reader.close();
         target.close();
         IOUtils.close(dir);
+    }
+
+    public void testAddIndicesWithParentField() throws IOException {
+        Directory[] dirs = new Directory[randomIntBetween(1, 10)];
+        final int numDocs = randomIntBetween(50, 100);
+        final Sort indexSort;
+        final boolean isParentFieldEnabled = randomBoolean();
+
+        indexSort = new Sort(new SortedNumericSortField("num", SortField.Type.LONG, true));
+
+        int id = 0;
+        for (int i = 0; i < dirs.length; i++) {
+            dirs[i] = newFSDirectory(createTempDir());
+            IndexWriterConfig iwc = newIndexWriterConfig().setMergePolicy(NoMergePolicy.INSTANCE)
+                .setOpenMode(IndexWriterConfig.OpenMode.CREATE);
+
+            iwc.setIndexSort(indexSort);
+            if (isParentFieldEnabled) {
+                iwc.setParentField(Lucene.PARENT_FIELD);
+            }
+
+            IndexWriter writer = new IndexWriter(dirs[i], iwc);
+            for (int j = 0; j < numDocs; j++) {
+                Document doc = new Document();
+                doc.add(new StringField("id", Integer.toString(id++), Field.Store.YES));
+                doc.add(new SortedNumericDocValuesField("num", randomLong()));
+
+                // Add parent field data if enabled
+                if (isParentFieldEnabled) {
+                    doc.add(new StringField(Lucene.PARENT_FIELD, "parent_" + (j % 5), Field.Store.NO));
+                }
+
+                writer.addDocument(doc);
+            }
+
+            writer.commit();
+            writer.close();
+        }
+
+        StoreRecovery storeRecovery = new StoreRecovery(new ShardId("foo", "bar", 1), logger);
+        ReplicationLuceneIndex indexStats = new ReplicationLuceneIndex();
+        Directory target = newFSDirectory(createTempDir());
+        final long maxSeqNo = randomNonNegativeLong();
+        final long maxUnsafeAutoIdTimestamp = randomNonNegativeLong();
+
+        storeRecovery.addIndices(
+            indexStats,
+            target,
+            indexSort,
+            dirs,
+            maxSeqNo,
+            maxUnsafeAutoIdTimestamp,
+            null,
+            isParentFieldEnabled,
+            0,
+            false,
+            false
+        );
+
+        int numFiles = 0;
+        Predicate<String> filesFilter = (f) -> f.startsWith("segments") == false
+            && f.equals("write.lock") == false
+            && f.startsWith("extra") == false;
+        for (Directory d : dirs) {
+            numFiles += (int) Arrays.asList(d.listAll()).stream().filter(filesFilter).count();
+        }
+        final long targetNumFiles = Arrays.asList(target.listAll()).stream().filter(filesFilter).count();
+        assertEquals(numFiles, targetNumFiles);
+        assertEquals(indexStats.totalFileCount(), targetNumFiles);
+
+        if (hardLinksSupported(createTempDir())) {
+            assertEquals(targetNumFiles, indexStats.reusedFileCount());
+        } else {
+            assertEquals(0, indexStats.reusedFileCount(), 0);
+        }
+
+        DirectoryReader reader = DirectoryReader.open(target);
+        SegmentInfos segmentCommitInfos = SegmentInfos.readLatestCommit(target);
+        final Map<String, String> userData = segmentCommitInfos.getUserData();
+        assertThat(userData.get(SequenceNumbers.MAX_SEQ_NO), equalTo(Long.toString(maxSeqNo)));
+        assertThat(userData.get(SequenceNumbers.LOCAL_CHECKPOINT_KEY), equalTo(Long.toString(maxSeqNo)));
+        assertThat(userData.get(Engine.MAX_UNSAFE_AUTO_ID_TIMESTAMP_COMMIT_ID), equalTo(Long.toString(maxUnsafeAutoIdTimestamp)));
+
+        for (SegmentCommitInfo info : segmentCommitInfos) {
+            assertEquals("all sources must be flush", info.info.getDiagnostics().get("source"), "flush");
+            assertEquals(indexSort, info.info.getIndexSort());
+
+            if (isParentFieldEnabled) {
+                assertNotNull("Parent field should be set in segment info", info.info.getAttribute(Lucene.PARENT_FIELD));
+            }
+        }
+
+        assertEquals(reader.numDeletedDocs(), 0);
+        assertEquals(reader.numDocs(), id);
+
+        if (isParentFieldEnabled) {
+            IndexSearcher searcher = new IndexSearcher(reader);
+            Query parentQuery = new TermQuery(new Term(Lucene.PARENT_FIELD, "parent_1"));
+            TopDocs hits = searcher.search(parentQuery, 100);
+            assertTrue("Should find documents with parent field", hits.totalHits.value() > 0);
+        }
+
+        reader.close();
+        target.close();
+        IOUtils.close(dirs);
     }
 
     public void testStatsDirWrapper() throws IOException {

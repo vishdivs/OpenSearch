@@ -40,12 +40,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.core.LogEvent;
 import org.apache.logging.log4j.core.appender.AbstractAppender;
 import org.apache.logging.log4j.core.filter.RegexFilter;
-import org.apache.lucene.document.Field;
-import org.apache.lucene.document.KeywordField;
-import org.apache.lucene.document.LongPoint;
-import org.apache.lucene.document.NumericDocValuesField;
-import org.apache.lucene.document.StoredField;
-import org.apache.lucene.document.TextField;
+import org.apache.lucene.document.*;
 import org.apache.lucene.index.DirectoryReader;
 import org.apache.lucene.index.IndexCommit;
 import org.apache.lucene.index.IndexReader;
@@ -208,6 +203,7 @@ import java.util.stream.Collectors;
 import java.util.stream.LongStream;
 
 import static java.util.Collections.shuffle;
+import static org.opensearch.common.xcontent.XContentFactory.jsonBuilder;
 import static org.opensearch.index.engine.Engine.Operation.Origin.LOCAL_RESET;
 import static org.opensearch.index.engine.Engine.Operation.Origin.LOCAL_TRANSLOG_RECOVERY;
 import static org.opensearch.index.engine.Engine.Operation.Origin.PEER_RECOVERY;
@@ -473,6 +469,39 @@ public class InternalEngineTests extends EngineTestCase {
             engine.index(indexForDoc(doc2));
             engine.refresh("test");
             ParsedDocument doc3 = testParsedDocument("3", null, testDocumentWithTextField(), B_3, null);
+            engine.index(indexForDoc(doc3));
+            engine.refresh("test");
+
+            segments = engine.segments(true);
+            assertThat(segments.size(), equalTo(3));
+            assertThat(segments.get(0).getSegmentSort(), equalTo(indexSort));
+            assertThat(segments.get(1).getSegmentSort(), equalTo(indexSort));
+            assertThat(segments.get(2).getSegmentSort(), equalTo(indexSort));
+        }
+    }
+
+    public void testSegmentsWithNestedFieldIndexSort() throws Exception {
+        Sort indexSort = new Sort(new SortedSetSortField("contacts.name", false));
+        try (
+            Store store = createStore();
+            Engine engine = createEngine(defaultSettings, store, createTempDir(), NoMergePolicy.INSTANCE, null, null, null, indexSort, null)
+        ) {
+            List<Segment> segments = engine.segments(true);
+            assertThat(segments.isEmpty(), equalTo(true));
+
+            ParsedDocument doc1 = createDocumentWithNestedField("1", "Alice", 30);
+            engine.index(indexForDoc(doc1));
+            engine.refresh("test");
+
+            segments = engine.segments(false);
+            assertThat(segments.size(), equalTo(1));
+            assertThat(segments.get(0).getSegmentSort(), equalTo(indexSort));
+
+            ParsedDocument doc2 = createDocumentWithNestedField("2", "Bob", 25);
+            engine.index(indexForDoc(doc2));
+            engine.refresh("test");
+
+            ParsedDocument doc3 = createDocumentWithNestedField("3", "Charlie", 35);
             engine.index(indexForDoc(doc3));
             engine.refresh("test");
 
@@ -8475,7 +8504,7 @@ public class InternalEngineTests extends EngineTestCase {
         IndexSettings indexSettings = IndexSettingsModule.newIndexSettings(indexMetadata);
 
         // Create mapping with required fields
-        XContentBuilder mapping = XContentFactory.jsonBuilder()
+        XContentBuilder mapping = jsonBuilder()
             .startObject()
             .startObject("_doc")
             .startObject("properties")
@@ -8519,4 +8548,25 @@ public class InternalEngineTests extends EngineTestCase {
             .build();
         return engineConfig;
     }
+
+    private ParsedDocument createDocumentWithNestedField(String id, String contactName, int contactAge) {
+        BytesReference source = null;
+        try {
+            XContentBuilder builder = jsonBuilder()
+                .startObject()
+                .field("foo", 123)
+                .field("foo1", "value")
+                .startObject("contacts")
+                .field("name", contactName)
+                .field("age", contactAge)
+                .endObject()
+                .endObject();
+            source = BytesReference.bytes(builder);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+
+        return testParsedDocument(id, null, testDocumentWithTextField(), source, null);
+    }
+
 }
