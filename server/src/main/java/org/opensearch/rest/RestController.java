@@ -59,6 +59,8 @@ import org.opensearch.identity.IdentityService;
 import org.opensearch.identity.Subject;
 import org.opensearch.identity.tokens.AuthToken;
 import org.opensearch.identity.tokens.RestTokenExtractor;
+import org.opensearch.throttling.AwsThrottlingService;
+import org.opensearch.throttling.AwsThrottlingSupplier;
 import org.opensearch.usage.UsageService;
 
 import java.io.ByteArrayOutputStream;
@@ -75,13 +77,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
-
+import com.amazonaws.throttling.client.ThrottlingClient;
 import static org.opensearch.cluster.metadata.IndexNameExpressionResolver.SYSTEM_INDEX_ACCESS_CONTROL_HEADER_KEY;
-import static org.opensearch.core.rest.RestStatus.BAD_REQUEST;
-import static org.opensearch.core.rest.RestStatus.INTERNAL_SERVER_ERROR;
-import static org.opensearch.core.rest.RestStatus.METHOD_NOT_ALLOWED;
-import static org.opensearch.core.rest.RestStatus.NOT_ACCEPTABLE;
-import static org.opensearch.core.rest.RestStatus.OK;
+import static org.opensearch.core.rest.RestStatus.*;
 import static org.opensearch.rest.BytesRestResponse.TEXT_CONTENT_TYPE;
 
 /**
@@ -94,7 +92,6 @@ public class RestController implements HttpServerTransport.Dispatcher {
     private static final Logger logger = LogManager.getLogger(RestController.class);
     private static final DeprecationLogger deprecationLogger = DeprecationLogger.getLogger(RestController.class);
     private static final String OPENSEARCH_PRODUCT_ORIGIN_HTTP_HEADER = "X-opensearch-product-origin";
-
     private static final BytesReference FAVICON_RESPONSE;
 
     static {
@@ -357,6 +354,22 @@ public class RestController implements HttpServerTransport.Dispatcher {
     }
 
     private void tryAllHandlers(final RestRequest request, final RestChannel channel, final ThreadContext threadContext) throws Exception {
+        AwsThrottlingService awsThrottlingService = AwsThrottlingSupplier.getAwsThrottlingService();
+        if (awsThrottlingService.shouldThrottle(request)) {
+            logger.warn("Request throttled for request: {}", request.rawPath());
+            channel.sendResponse(BytesRestResponse.createSimpleErrorResponse(
+                channel, TOO_MANY_REQUESTS, "Request rate limit exceeded"));
+            return;
+        }
+
+        Map<String, List<String>> allHeaders = request.getHeaders();
+        logger.info("getting all the headers");
+        StringBuilder headerLog = new StringBuilder("All request headers for path ").append(request.rawPath()).append(": ");
+        for (Map.Entry<String, List<String>> entry : allHeaders.entrySet()) {
+            headerLog.append(entry.getKey()).append("=").append(String.join(",", entry.getValue())).append("; ");
+        }
+        logger.info(headerLog.toString());
+
         for (final RestHeaderDefinition restHeader : headersToCopy) {
             final String name = restHeader.getName();
             final List<String> headerValues = request.getAllHeaderValues(name);
@@ -373,6 +386,7 @@ public class RestController implements HttpServerTransport.Dispatcher {
                     return;
                 } else {
                     threadContext.putHeader(name, String.join(",", distinctHeaderValues));
+                    logger.info("This header string for header name {} is {}", name,String.join(",", distinctHeaderValues) );
                 }
             }
         }

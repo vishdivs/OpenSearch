@@ -1,0 +1,5 @@
+AwsThrottlingJavaClient
+Copyright 2024 Amazon Web Services
+
+This product includes software developed at
+Amazon Web Services (https://aws.amazon.com/).

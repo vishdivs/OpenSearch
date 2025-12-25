@@ -85,6 +85,16 @@ grant codeBase "${codebase.zstd-jni}" {
   permission java.lang.RuntimePermission "loadLibrary.*";
 };
 
+// AWS Throttling JNI
+grant codeBase "${codebase.AwsThrottlingJavaClient}" {
+  permission java.lang.RuntimePermission "loadLibrary.*";
+};
+
+grant codeBase "${codebase.jniclasspathloader}" {
+  permission java.lang.RuntimePermission "loadLibrary.*";
+  permission java.io.FilePermission "<<ALL FILES>>", "read";
+};
+
 //// Everything else:
 
 grant {
@@ -94,6 +104,10 @@ grant {
   // checked by scripting engines, and before hacks and other issues in
   // third party code, to safeguard these against unprivileged code like scripts.
   permission org.opensearch.SpecialPermission;
+
+    // AWS Throttling native library loading
+    permission java.lang.RuntimePermission "loadLibrary.*";
+    permission java.io.FilePermission "<<ALL FILES>>", "read";
 
   // Allow host/ip name service lookups
   permission java.net.SocketPermission "*", "resolve";

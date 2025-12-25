@@ -76,6 +76,10 @@ allprojects {
   group = 'org.opensearch'
   version = VersionProperties.getOpenSearch()
   description = "OpenSearch subproject ${project.path}"
+  
+  repositories {
+    mavenLocal()
+  }
 }
 
 configure(allprojects - project(':distribution:archives:integ-test-zip')) {

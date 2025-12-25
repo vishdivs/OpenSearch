@@ -234,6 +234,8 @@ import org.opensearch.telemetry.tracing.TracerFactory;
 import org.opensearch.threadpool.ExecutorBuilder;
 import org.opensearch.threadpool.RunnableTaskExecutionListener;
 import org.opensearch.threadpool.ThreadPool;
+import org.opensearch.throttling.AwsThrottlingService;
+import org.opensearch.throttling.AwsThrottlingSupplier;
 import org.opensearch.transport.RemoteClusterService;
 import org.opensearch.transport.Transport;
 import org.opensearch.transport.TransportInterceptor;
@@ -1122,6 +1124,10 @@ public class Node implements Closeable {
                 .flatMap(List::stream)
                 .collect(toList());
 
+            final AwsThrottlingService awsThrottlingService = new AwsThrottlingService(true);
+             AwsThrottlingSupplier.setAwsThrottlingService(awsThrottlingService);
+             resourcesToClose.add(awsThrottlingService);
+
             final PersistentTasksExecutorRegistry registry = new PersistentTasksExecutorRegistry(tasksExecutors);
             final PersistentTasksClusterService persistentTasksClusterService = new PersistentTasksClusterService(
                 settings,
@@ -1220,6 +1226,7 @@ public class Node implements Closeable {
                 b.bind(MetricsRegistry.class).toInstance(metricsRegistry);
                 b.bind(RemoteClusterStateService.class).toProvider(() -> remoteClusterStateService);
                 b.bind(PersistedStateRegistry.class).toInstance(persistedStateRegistry);
+                b.bind(AwsThrottlingService.class).toInstance(awsThrottlingService);
             });
             injector = modules.createInjector();
 
@@ -1329,6 +1336,7 @@ public class Node implements Closeable {
         injector.getInstance(RepositoriesService.class).start();
         injector.getInstance(SearchService.class).start();
         injector.getInstance(FsHealthService.class).start();
+        injector.getInstance(AwsThrottlingService.class).start();
         nodeService.getMonitorService().start();
         nodeService.getSearchBackpressureService().start();
         nodeService.getTaskCancellationMonitoringService().start();
