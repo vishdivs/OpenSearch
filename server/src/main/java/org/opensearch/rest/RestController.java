@@ -356,19 +356,11 @@ public class RestController implements HttpServerTransport.Dispatcher {
     private void tryAllHandlers(final RestRequest request, final RestChannel channel, final ThreadContext threadContext) throws Exception {
         AwsThrottlingService awsThrottlingService = AwsThrottlingSupplier.getAwsThrottlingService();
         if (awsThrottlingService.shouldThrottle(request)) {
-            logger.warn("Request throttled for request: {}", request.rawPath());
+            logger.warn("Request throttled for account: {}", awsThrottlingService.extractHostFromHeaders(request));
             channel.sendResponse(BytesRestResponse.createSimpleErrorResponse(
                 channel, TOO_MANY_REQUESTS, "Request rate limit exceeded"));
             return;
         }
-
-        Map<String, List<String>> allHeaders = request.getHeaders();
-        logger.info("getting all the headers");
-        StringBuilder headerLog = new StringBuilder("All request headers for path ").append(request.rawPath()).append(": ");
-        for (Map.Entry<String, List<String>> entry : allHeaders.entrySet()) {
-            headerLog.append(entry.getKey()).append("=").append(String.join(",", entry.getValue())).append("; ");
-        }
-        logger.info(headerLog.toString());
 
         for (final RestHeaderDefinition restHeader : headersToCopy) {
             final String name = restHeader.getName();
@@ -386,7 +378,6 @@ public class RestController implements HttpServerTransport.Dispatcher {
                     return;
                 } else {
                     threadContext.putHeader(name, String.join(",", distinctHeaderValues));
-                    logger.info("This header string for header name {} is {}", name,String.join(",", distinctHeaderValues) );
                 }
             }
         }

@@ -72,9 +72,19 @@ public class AwsThrottlingService extends AbstractLifecycleComponent {
 
         try (ThrottlingHandle handle = throttlingClient.createHandle(getRequestId(request))) {
             final ThrottlingDimensions dimensions = buildDimensions(request);
+            if(dimensions==null) {
+                logger.warn("Could not build throttling dimensions for host: {}, allowing request ",
+                        this.extractHostFromHeaders(request));
+                return false;
+            }
+            float estimatedConsumption = 1.0;
+            if(isLargeContentSize(request))
+            {
+                estimatedConsumption = 3.0;
+            }
             final boolean throttled =  handle.shouldThrottle(
                 dimensions,
-                1.0, // estimatedConsumption
+                estimatedConsumption, // estimatedConsumption
                 0.0, // unconditionalConsumption
                 SyncFailBehavior.LAST_KNOWN_RATE_OR_FAIL_OPEN
             );
@@ -87,10 +97,40 @@ public class AwsThrottlingService extends AbstractLifecycleComponent {
     }
 
     private ThrottlingDimensions buildDimensions(RestRequest request) {
-        final String accountId = "100000000001";
+        final String hostHeader = extractHostFromHeaders(request);
+        final String accountId = extractAccountIdFromHost(hostHeader);
+        if(accountId==null) {
+            return null;
+        }
         return ThrottlingDimensions.builder()
             .addDimension("aws-account", accountId)
             .build();
+    }
+
+    public String extractHostFromHeaders(RestRequest request) {
+        final String hostHeader = request.header("Host");
+        if (hostHeader != null && !hostHeader.isEmpty()) {
+            return hostHeader;
+        }
+        return null;
+    }
+
+    private String extractAccountIdFromHost(String hostHeader) {
+        if (hostHeader == null || hostHeader.isEmpty()) {
+            return null;
+        }
+
+        // Extract account ID from host pattern like: 100000000001.aoss-idx-partitions.eu-north-1.test:9200
+        final String[] parts = hostHeader.split("\\.");
+        if (parts.length > 0 && parts[0].matches("\\d{12}")) {
+            return parts[0];
+        }
+        logger.error("Could not extract account ID from host: {}, using default", hostHeader);
+        return null;
+    }
+
+    private boolean isLargeContentSize(RestRequest request) {
+       return  (request.content().length()/1024)>100;
     }
 
 
