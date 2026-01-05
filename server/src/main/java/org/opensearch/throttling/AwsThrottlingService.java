@@ -8,14 +8,7 @@
 
 package org.opensearch.throttling;
 
-import com.amazonaws.throttling.client.ThrottlingClient;
-import com.amazonaws.throttling.client.ThrottlingClientConfig;
-import com.amazonaws.throttling.client.ThrottlingDimensions;
-import com.amazonaws.throttling.client.ThrottlingHandle;
-import com.amazonaws.throttling.client.SyncFailBehavior;
-import com.amazonaws.throttling.client.NativeCache;
-import com.amazonaws.throttling.client.NativeQuerylog;
-import com.amazonaws.throttling.client.QuerylogConfig;
+import com.amazonaws.throttling.client.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.opensearch.common.lifecycle.AbstractLifecycleComponent;
@@ -44,11 +37,18 @@ public class AwsThrottlingService extends AbstractLifecycleComponent {
     private ThrottlingClient initializeClient() {
         try {
             final NativeCache cache = new NativeCache(CACHE_SIZE);
+            final QuerylogConfig querylogConfig = QuerylogConfig.builder()
+                .filename("/tmp/aws_throttle_log")
+                .program("JunoAWSThrottlingService")
+                .build();
+            final NativeQuerylog queryLog = new NativeQuerylog(querylogConfig);
             final ThrottlingClientConfig config = ThrottlingClientConfig.builder()
                 .ruleSetName(RULESET_NAME)
                 .cache(cache)
                 .region("eu-north-1")
                 .clientId(getHostname())
+                .querylog(queryLog)
+                .metricsLevel(MetricsLevel.ALL)
                 .cache(cache)
                 .build();
 
@@ -77,10 +77,10 @@ public class AwsThrottlingService extends AbstractLifecycleComponent {
                         this.extractHostFromHeaders(request));
                 return false;
             }
-            float estimatedConsumption = 1.0;
+            float estimatedConsumption = 1.0F;
             if(isLargeContentSize(request))
             {
-                estimatedConsumption = 3.0;
+                estimatedConsumption = 3.0F;
             }
             final boolean throttled =  handle.shouldThrottle(
                 dimensions,
