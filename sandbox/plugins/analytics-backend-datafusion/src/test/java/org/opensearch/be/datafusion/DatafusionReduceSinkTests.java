@@ -107,7 +107,7 @@ public class DatafusionReduceSinkTests extends OpenSearchTestCase {
     public void testFeedDrainsSumToDownstream() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
         assertTrue("runtime ptr non-zero", runtimePtr != 0);
         NativeRuntimeHandle runtimeHandle = new NativeRuntimeHandle(runtimePtr);
 
@@ -281,7 +281,7 @@ public class DatafusionReduceSinkTests extends OpenSearchTestCase {
     public void testDrainTaskKeepsUpWithProducer() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
         NativeRuntimeHandle runtimeHandle = new NativeRuntimeHandle(runtimePtr);
 
         try (RootAllocator alloc = new RootAllocator(Long.MAX_VALUE)) {
@@ -335,7 +335,7 @@ public class DatafusionReduceSinkTests extends OpenSearchTestCase {
     public void testReduceProducesOutputIncrementallyForPipelinedPlan() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
         NativeRuntimeHandle runtimeHandle = new NativeRuntimeHandle(runtimePtr);
 
         try (RootAllocator alloc = new RootAllocator(Long.MAX_VALUE)) {
@@ -482,7 +482,7 @@ public class DatafusionReduceSinkTests extends OpenSearchTestCase {
     public void testCancelBeforeFirstBatchUnwindsDrain() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
         NativeRuntimeHandle runtimeHandle = new NativeRuntimeHandle(runtimePtr);
 
         try (RootAllocator alloc = new RootAllocator(Long.MAX_VALUE)) {
@@ -531,7 +531,7 @@ public class DatafusionReduceSinkTests extends OpenSearchTestCase {
     public void testCancelAfterFirstBatchUnwindsDrain() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
         NativeRuntimeHandle runtimeHandle = new NativeRuntimeHandle(runtimePtr);
 
         try (RootAllocator alloc = new RootAllocator(Long.MAX_VALUE)) {
@@ -578,7 +578,7 @@ public class DatafusionReduceSinkTests extends OpenSearchTestCase {
     public void testDoubleCloseIsIdempotent() throws Exception {
         NativeBridge.initTokioRuntimeManager(2);
         Path spillDir = createTempDir("datafusion-spill");
-        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024);
+        long runtimePtr = NativeBridge.createGlobalRuntime(64 * 1024 * 1024, 0L, spillDir.toString(), 32 * 1024 * 1024, false, 0L, Long.MAX_VALUE, "/tmp/opensearch/liquid_cache", "lru");
         NativeRuntimeHandle runtimeHandle = new NativeRuntimeHandle(runtimePtr);
 
         try (RootAllocator alloc = new RootAllocator(Long.MAX_VALUE)) {
