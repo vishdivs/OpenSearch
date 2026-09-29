@@ -9,6 +9,7 @@
 package org.opensearch.analytics.spi;
 
 import org.opensearch.common.annotation.ExperimentalApi;
+import org.opensearch.common.document.DocumentField;
 import org.opensearch.common.lucene.uid.Versions;
 import org.opensearch.common.xcontent.XContentFactory;
 import org.opensearch.core.common.bytes.BytesReference;
@@ -21,6 +22,7 @@ import org.opensearch.index.engine.exec.IndexReaderProvider;
 import org.opensearch.index.engine.exec.Segment;
 import org.opensearch.index.engine.exec.WriterFileSet;
 import org.opensearch.index.get.DocumentLookupResult;
+import org.opensearch.index.mapper.RoutingFieldMapper;
 import org.opensearch.index.mapper.SeqNoFieldMapper;
 import org.opensearch.index.seqno.SequenceNumbers;
 import org.opensearch.indices.IndicesModule;
@@ -164,7 +166,20 @@ public class DocumentLookupService {
             source = BytesReference.bytes(xcb);
         }
 
-        return new DocumentLookupResult(id, version, true, source, seqNo, primaryTerm, Map.of(), Map.of());
+        return new DocumentLookupResult(id, version, true, source, seqNo, primaryTerm, Map.of(), extractMetadataFields(row));
+    }
+
+    /**
+     * Metadata fields that must survive a lookup as {@link DocumentField}s rather than being folded into
+     * {@code _source}. {@code _routing} is required: the update path reads it back off the {@code GetResult}
+     * to place the regenerated index request on the same shard.
+     */
+    private static Map<String, DocumentField> extractMetadataFields(Map<String, Object> row) {
+        Object routing = row.get(RoutingFieldMapper.NAME);
+        if (routing == null) {
+            return Map.of();
+        }
+        return Map.of(RoutingFieldMapper.NAME, new DocumentField(RoutingFieldMapper.NAME, List.of(routing.toString())));
     }
 
     public static long extractLong(Map<String, Object> row, String key, long fallback) {

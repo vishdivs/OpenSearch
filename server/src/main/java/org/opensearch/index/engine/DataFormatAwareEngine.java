@@ -21,6 +21,7 @@ import org.opensearch.common.SetOnce;
 import org.opensearch.common.annotation.ExperimentalApi;
 import org.opensearch.common.concurrent.GatedCloseable;
 import org.opensearch.common.concurrent.GatedConditionalCloseable;
+import org.opensearch.common.document.DocumentField;
 import org.opensearch.common.lease.Releasable;
 import org.opensearch.common.logging.Loggers;
 import org.opensearch.common.lucene.Lucene;
@@ -82,6 +83,7 @@ import org.opensearch.index.get.DocumentLookupResult;
 import org.opensearch.index.mapper.DocumentMapperForType;
 import org.opensearch.index.mapper.IdFieldMapper;
 import org.opensearch.index.mapper.ParsedDocument;
+import org.opensearch.index.mapper.RoutingFieldMapper;
 import org.opensearch.index.mapper.SeqNoFieldMapper;
 import org.opensearch.index.mapper.SourceToParse;
 import org.opensearch.index.mapper.Uid;
@@ -2248,7 +2250,7 @@ public class DataFormatAwareEngine implements Indexer {
                                     index.seqNo(),
                                     index.primaryTerm(),
                                     Map.of(),
-                                    Map.of()
+                                    routingMetadata(index.routing())
                                 ).toGetResult();
                             }
                         } catch (IOException e) {
@@ -2265,6 +2267,18 @@ public class DataFormatAwareEngine implements Indexer {
                 return result.exists() ? result.toGetResult() : Engine.GetResult.NOT_EXISTS;
             }
         } // readLock
+    }
+
+    /**
+     * Surfaces {@code _routing} as a metadata field on a translog-backed get. The update path reads it back
+     * off the {@link org.opensearch.index.get.GetResult} to place the regenerated index request on the same
+     * shard, so dropping it turns a routed update into an unrouted one.
+     */
+    private static Map<String, DocumentField> routingMetadata(String routing) {
+        if (routing == null) {
+            return Map.of();
+        }
+        return Map.of(RoutingFieldMapper.NAME, new DocumentField(RoutingFieldMapper.NAME, List.of(routing)));
     }
 
     /**

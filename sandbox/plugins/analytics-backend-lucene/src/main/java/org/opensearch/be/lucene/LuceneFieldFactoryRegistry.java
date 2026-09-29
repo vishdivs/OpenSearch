@@ -19,6 +19,7 @@ import org.opensearch.common.annotation.ExperimentalApi;
 import org.opensearch.index.mapper.IdFieldMapper;
 import org.opensearch.index.mapper.KeywordFieldMapper;
 import org.opensearch.index.mapper.MatchOnlyTextFieldMapper;
+import org.opensearch.index.mapper.RoutingFieldMapper;
 import org.opensearch.index.mapper.SeqNoFieldMapper;
 import org.opensearch.index.mapper.SourceFieldMapper;
 import org.opensearch.index.mapper.TextFieldMapper;
@@ -51,6 +52,20 @@ public final class LuceneFieldFactoryRegistry {
         ID_FIELD_TYPE.freeze();
     }
 
+    // _routing carries its own type: RoutingFieldType declares TextSearchInfo.SIMPLE_MATCH_ONLY, whose
+    // Lucene FieldType is neither indexed nor stored, so the type derived from the mapper is unusable.
+    // Not stored here — the primary format claims STORED_FIELDS for _routing.
+    private static final FieldType ROUTING_FIELD_TYPE = new FieldType();
+
+    static {
+        ROUTING_FIELD_TYPE.setTokenized(false);
+        ROUTING_FIELD_TYPE.setIndexOptions(IndexOptions.DOCS);
+        ROUTING_FIELD_TYPE.setOmitNorms(true);
+        ROUTING_FIELD_TYPE.setStored(false);
+        ROUTING_FIELD_TYPE.setDocValuesType(DocValuesType.NONE);
+        ROUTING_FIELD_TYPE.freeze();
+    }
+
     // ── Default factories ──
     private static final LuceneFieldFactory TEXT_FACTORY = (doc, ft, value, lft) -> {
         doc.add(new Field(ft.name(), value.toString(), lft));
@@ -66,6 +81,10 @@ public final class LuceneFieldFactoryRegistry {
 
     private static final LuceneFieldFactory ID_FIELD_FACTORY = (doc, ft, value, lft) -> {
         doc.add(new Field(ft.name(), new BytesRef((byte[]) value), ID_FIELD_TYPE));
+    };
+
+    private static final LuceneFieldFactory ROUTING_FIELD_FACTORY = (doc, ft, value, lft) -> {
+        doc.add(new Field(ft.name(), value.toString(), ROUTING_FIELD_TYPE));
     };
 
     private static final LuceneFieldFactory SEQ_NO_FIELD_FACTORY = (doc, ft, value, lft) -> {
@@ -100,7 +119,8 @@ public final class LuceneFieldFactoryRegistry {
         register(SeqNoFieldMapper.PRIMARY_TERM_NAME, NUMERIC_DOC_VALUES_FACTORY);
         register(VersionFieldMapper.CONTENT_TYPE, NUMERIC_DOC_VALUES_FACTORY);
         register(SourceFieldMapper.CONTENT_TYPE, (d, ft, v, lft) -> d.add(new Field(ft.name(), (BytesRef) v, lft)));
-        // pending routing and ignored field handling
+        register(RoutingFieldMapper.CONTENT_TYPE, ROUTING_FIELD_FACTORY);
+        // pending ignored field handling
     }
 
     /**

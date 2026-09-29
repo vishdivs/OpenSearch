@@ -9,6 +9,8 @@
 package org.opensearch.composite;
 
 import org.opensearch.action.DocWriteResponse;
+import org.opensearch.action.RoutingMissingException;
+import org.opensearch.action.bulk.BulkResponse;
 import org.opensearch.action.delete.DeleteResponse;
 import org.opensearch.action.get.GetResponse;
 import org.opensearch.action.index.IndexResponse;
@@ -20,6 +22,7 @@ import org.opensearch.common.xcontent.json.JsonXContent;
 import org.opensearch.core.rest.RestStatus;
 import org.opensearch.core.xcontent.DeprecationHandler;
 import org.opensearch.core.xcontent.NamedXContentRegistry;
+import org.opensearch.core.xcontent.XContentBuilder;
 import org.opensearch.core.xcontent.XContentParser;
 import org.opensearch.index.engine.VersionConflictEngineException;
 import org.opensearch.index.engine.exec.Segment;
@@ -577,5 +580,130 @@ public class DataFormatAwareUpdateIT extends AbstractCompositeEngineIT {
         GetResponse get = client().prepareGet(INDEX, "k1").setRealtime(false).get();
         assertFields("get after chained partial updates", get.getSourceAsMap(), "keep", "keep title", 10L, 9.75, false);
         assertEquals(3L, get.getVersion());
+    }
+
+    /** Updatable composite index, optionally with {@code _routing} required. */
+    private void createManualRefreshRoutedIndex(int shards, boolean routingRequired) throws IOException {
+        Settings settings = Settings.builder()
+            .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, shards)
+            .put(IndexMetadata.SETTING_NUMBER_OF_REPLICAS, 0)
+            .put("index.pluggable.dataformat.enabled", true)
+            .put("index.pluggable.dataformat", "composite")
+            .put("index.composite.primary_data_format", "parquet")
+            .putList("index.composite.secondary_data_formats", "lucene")
+            .put(IndexMetadata.INDEX_APPEND_ONLY_ENABLED_SETTING.getKey(), false)
+            .put("index.refresh_interval", -1)
+            .build();
+        XContentBuilder mapping = JsonXContent.contentBuilder().startObject();
+        if (routingRequired) {
+            mapping.startObject("_routing").field("required", true).endObject();
+        }
+        mapping.startObject("properties")
+            .startObject("name")
+            .field("type", "keyword")
+            .endObject()
+            .startObject("value")
+            .field("type", "integer")
+            .endObject()
+            .endObject()
+            .endObject();
+        client().admin().indices().prepareCreate(INDEX).setSettings(settings).setMapping(mapping).get();
+        ensureGreen(INDEX);
+    }
+
+    /**
+     * Index / get / update / delete carrying an explicit {@code routing} on a composite index. The
+     * Lucene secondary declares {@code _routing} as a full-text field, so a missing field factory used
+     * to reject every routed write with {@code Failed to add field [_routing] in secondary format
+     * [lucene]}. One shard, so the parquet row can be read back to prove the value is persisted.
+     */
+    public void testRoutedMutations() throws IOException {
+        createManualRefreshRoutedIndex(1, false);
+        String routing = "tenant-a";
+
+        IndexResponse created = client().prepareIndex(INDEX).setId("k1").setRouting(routing).setSource("name", "v_old", "value", 1).get();
+        assertEquals(DocWriteResponse.Result.CREATED, created.getResult());
+
+        GetResponse realtime = client().prepareGet(INDEX, "k1").setRouting(routing).setRealtime(true).get();
+        assertTrue("routed realtime get must find the doc", realtime.isExists());
+        assertEquals("v_old", name(realtime));
+
+        UpdateResponse updated = client().prepareUpdate(INDEX, "k1").setRouting(routing).setDoc("value", 2).get();
+        assertEquals(DocWriteResponse.Result.UPDATED, updated.getResult());
+
+        refreshIndex(INDEX);
+        GetResponse afterUpdate = client().prepareGet(INDEX, "k1").setRouting(routing).setRealtime(false).get();
+        assertTrue("routed post-refresh get must find the doc", afterUpdate.isExists());
+        assertEquals(2, value(afterUpdate));
+
+        List<Map<String, Object>> rows = readParquetRows();
+        Map<String, Object> row = rowAtSeqNo(rows, updated.getSeqNo());
+        assertEquals("_routing must round-trip into the parquet row", routing, row.get("_routing"));
+
+        DeleteResponse deleted = client().prepareDelete(INDEX, "k1").setRouting(routing).get();
+        assertEquals(DocWriteResponse.Result.DELETED, deleted.getResult());
+        refreshIndex(INDEX);
+        assertFalse(
+            "routed delete must hide the doc",
+            client().prepareGet(INDEX, "k1").setRouting(routing).setRealtime(false).get().isExists()
+        );
+    }
+
+    /**
+     * {@code _routing.required: true} across multiple shards: every mutation must supply routing, and
+     * one that omits it is rejected with {@link RoutingMissingException} exactly as on vanilla.
+     */
+    public void testRequiredRoutingMutations() throws IOException {
+        createManualRefreshRoutedIndex(3, true);
+        String routing = "tenant-b";
+
+        expectThrows(
+            RoutingMissingException.class,
+            () -> client().prepareIndex(INDEX).setId("k1").setSource("name", "v", "value", 1).get()
+        );
+
+        IndexResponse created = client().prepareIndex(INDEX).setId("k1").setRouting(routing).setSource("name", "v", "value", 1).get();
+        assertEquals(DocWriteResponse.Result.CREATED, created.getResult());
+
+        expectThrows(RoutingMissingException.class, () -> client().prepareUpdate(INDEX, "k1").setDoc("value", 2).get());
+        expectThrows(RoutingMissingException.class, () -> client().prepareDelete(INDEX, "k1").get());
+
+        UpdateResponse updated = client().prepareUpdate(INDEX, "k1").setRouting(routing).setDoc("value", 2).get();
+        assertEquals(DocWriteResponse.Result.UPDATED, updated.getResult());
+
+        refreshIndex(INDEX);
+        GetResponse get = client().prepareGet(INDEX, "k1").setRouting(routing).setRealtime(false).get();
+        assertTrue("routed get must find the doc", get.isExists());
+        assertEquals(2, value(get));
+
+        DeleteResponse deleted = client().prepareDelete(INDEX, "k1").setRouting(routing).get();
+        assertEquals(DocWriteResponse.Result.DELETED, deleted.getResult());
+    }
+
+    /** Bulk index / update / delete actions all carrying routing, verified per item. */
+    public void testBulkRoutedMutations() throws IOException {
+        createManualRefreshRoutedIndex(3, false);
+        String routing = "tenant-c";
+
+        BulkResponse indexed = client().prepareBulk()
+            .add(client().prepareIndex(INDEX).setId("b1").setRouting(routing).setSource("name", "one", "value", 1))
+            .add(client().prepareIndex(INDEX).setId("b2").setRouting(routing).setSource("name", "two", "value", 2))
+            .get();
+        assertFalse(indexed.buildFailureMessage(), indexed.hasFailures());
+
+        BulkResponse mutated = client().prepareBulk()
+            .add(client().prepareUpdate(INDEX, "b1").setRouting(routing).setDoc("value", 11))
+            .add(client().prepareDelete(INDEX, "b2").setRouting(routing))
+            .get();
+        assertFalse(mutated.buildFailureMessage(), mutated.hasFailures());
+
+        refreshIndex(INDEX);
+        GetResponse survivor = client().prepareGet(INDEX, "b1").setRouting(routing).setRealtime(false).get();
+        assertTrue("updated bulk item must survive", survivor.isExists());
+        assertEquals(11, value(survivor));
+        assertFalse(
+            "deleted bulk item must be gone",
+            client().prepareGet(INDEX, "b2").setRouting(routing).setRealtime(false).get().isExists()
+        );
     }
 }
